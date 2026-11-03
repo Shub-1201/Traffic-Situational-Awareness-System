@@ -1,11 +1,21 @@
 # Traffic-Situational-Awareness-System
 A near real-time Situational Awareness system that ingests live traffic camera images and VDOT sensor data from multiple sources, fuses them by location, and updates a 3D scene in GaiaViz.
 The system relays information regarding traffic conditions using live traffic cam feeds, the information is processed and its then used to update live 3D Dashboard in GaiaViz tool.  
-<p align = "center">
-    <img width="450" height="450" alt="Adobe Express - Realtime SAS Datascape" src="https://github.com/user-attachments/assets/de9531c5-0814-4594-968d-bb433597fec5" />
 <p align="center">
-    <img width="436" height="358" alt="GaiaViz System demo" src="https://github.com/user-attachments/assets/a43e15de-2a50-40e4-afeb-7911235cb6ae" />
+  <img
+    src="https://github.com/user-attachments/assets/de9531c5-0814-4594-968d-bb433597fec5"
+    width="450"
+    alt="Adobe Express - Realtime SAS Datascape"
+  />
+</p>
 
+<p align="center">
+  <img
+    src="https://github.com/user-attachments/assets/a43e15de-2a50-40e4-afeb-7911235cb6ae"
+    width="436"
+    alt="GaiaViz System Demo"
+  />
+</p>
 
 ## Problem Statement
 
