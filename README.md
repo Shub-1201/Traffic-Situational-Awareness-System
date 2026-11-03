@@ -1,313 +1,167 @@
-# GaiaViz Scene Updater
+# Traffic-Situational-Awareness-System
+A near real-time Situational Awareness system that ingests live traffic camera images and VDOT sensor data from multiple sources, fuses them by location, and updates a 3D scene in GaiaViz.
+The system relays information regarding traffic conditions using live traffic cam feeds, the information is processed and its then used to update live 3D Dashboard in GaiaViz tool.  
+<p align = "center">
+    <img width="450" height="450" alt="Adobe Express - Realtime SAS Datascape" src="https://github.com/user-attachments/assets/de9531c5-0814-4594-968d-bb433597fec5" />
+<p align="center">
+    <img width="436" height="358" alt="GaiaViz System demo" src="https://github.com/user-attachments/assets/a43e15de-2a50-40e4-afeb-7911235cb6ae" />
 
-A Python package that maps real-time traffic sensor data and YOLO object detection results onto a GaiaViz 3D scene. It reads CSV data files and updates the GaiaViz node CSV to change glyph colors, sizes, and textures — producing a static scene snapshot that visualizes corridor conditions.
 
-## Overview
+## Problem Statement
 
-The Arlington Corridor Situational Awareness project uses GaiaViz to visualize traffic conditions across 5 locations on the I-66 and I-395 corridors. Each location is represented by a **hyperglyph** — a hierarchical 3D structure with a camera cube, detection leaf rings, weather cubes, and inter-location links.
+Transportation Management Center (TMC) operators need a clear view of what is happening on the road, right now. Today, the information they rely on sits across disconnected dashboards: traffic flow in one, weather in another, cameras and incident reports somewhere else.
 
-This package automates the process of mapping data to those glyphs. Instead of manually editing the node CSV, you run one command and the scene updates.
+During an incident, operators have to correlate these feeds by hand, under pressure, on displays that often refresh only every 30 to 60 seconds. This fragmentation can extend response times by up to 30% during critical events (Endsley & Jones, 2012), and every added minute increases the risk to drivers, pedestrians, and first responders.
 
-## Quick start
+**Our question:** how can live traffic, weather, event, and camera data be brought together into a single spatial view, so operators can understand a situation at a glance instead of assembling it across screens?
+
+## What We Built
+
+We built a serverless pipeline and a 3D operational view for Arlington County's I-66 and I-395 corridors. The system:
+
+- **Ingests** live VDOT SmarterRoads and 511 data on an automated schedule
+- **Detects** vehicles in roadside camera images with YOLOv8
+- **Fuses** streams that update at different rates into one location-aware dataset
+- **Translates** GPS coordinates into the GaiaViz scene grid
+- **Updates** the 3D scene live, so congestion, weather, camera imagery, and vehicle counts appear together at their real-world positions
+
+## Results
+
+| Measure | Result |
+|---|---|
+| End-to-end latency (API pull to visible scene update) | Under 10 seconds, compared with 30 to 60 second refresh cycles on traditional 2D dashboards |
+| 3D rendering | 120+ FPS in GaiaViz |
+| Vehicle detection | Average confidence of 0.68 to 0.74 on about 2,200 images across 5 locations |
+
+## Architecture
+
+```mermaid
+flowchart LR
+    A["VDOT SmarterRoads and 511 APIs"] --> B["AWS Lambda ingestion<br/>(EventBridge schedule)"]
+    B --> C["Amazon S3"]
+    C --> D["YOLOv8 inference<br/>(Amazon SageMaker)"]
+    C --> E["Haversine geospatial fusion"]
+    D --> F["yolo.csv"]
+    E --> G["fused_data.csv"]
+    F --> H["scene_updater<br/>(Python orchestrator)"]
+    G --> H
+    H -->|"OSC over UDP 8000"| I["GaiaViz 3D scene"]
+```
+
+1. **Ingestion:** EventBridge triggers Lambda functions every 5 minutes. Each statewide cycle collects 1,255 sensor records, and the raw data lands in S3.
+2. **Detection:** A pretrained YOLOv8 model on SageMaker counts cars, trucks, and buses in camera images, using a confidence threshold of 0.25.
+3. **Fusion:** Each sensor record is matched to its nearest weather station and event within a set distance, using the Haversine formula. This joins streams with no shared key and different update rates (traffic about every minute, weather every 5 to 10 minutes).
+4. **Coordinate translation:** A reusable Python CLI tool converts GPS coordinates to GaiaViz subgrid positions with a slope-intercept mapping (`Y = MX + B`). It runs on both macOS and Windows.
+5. **Scene update:** `scene_updater` runs on a 30-second cycle. It reads the latest outputs, computes the state of each node, backs up and rewrites the node file, and sends OSC messages so GaiaViz picks up the changes live.
+
+## Data
+
+The system uses **live data only**.
+
+| Stream | Coverage | Used for |
+|---|---|---|
+| Traffic sensors | 115 sensors in Arlington | Occupancy and congestion state on corridor links |
+| Weather stations | 10 stations | Environmental conditions at each location |
+| Events | Filtered to Arlington | Incident context in the fused dataset |
+| Roadside cameras | 5 corridor locations | Vehicle counts and live imagery in the scene |
+
+Camera images were narrowed in stages to protect data quality:
+
+| Stage | Images |
+|---|---|
+| Raw frames collected | About 400,000 |
+| After quality filtering (low-light frames removed) | About 25,000 |
+| Run through YOLOv8 evaluation | About 2,200 |
+
+## Reading the 3D Scene
+
+The scene contains 92 nodes, including 5 hyperglyphs that each carry 9 leaf nodes (3 vehicle clusters across the 3 most recent time snapshots).
+
+| Visual element | What it shows |
+|---|---|
+| Link color | Worst-case occupancy along a corridor segment |
+| Red leaf | `bus_count`, used as the emergency-vehicle cluster |
+| Yellow leaf | `truck_count` |
+| Blue leaf | `car_count` |
+| Grey leaf | Zero detections |
+| Leaf scale | Size of the vehicle count |
+| Camera and weather cubes | Latest imagery, applied as textures |
+
+## Repository Structure
+
+```text
+.
+├── ingestion/          # AWS Lambda functions for live data collection
+├── detection/          # YOLOv8 inference on SageMaker
+├── fusion/             # Haversine nearest-neighbor fusion
+├── scene_updater/      # 6-module orchestrator; config.py holds all field mappings
+├── tools/              # GPS-to-subgrid coordinate translation CLI
+├── data/sample/        # Small sample outputs for reference
+├── docs/               # Project report, diagrams, and demo assets
+├── requirements.txt
+└── README.md
+```
+
+## Quickstart
+
+### Prerequisites
+
+- Python 3
+- An AWS account with access to Lambda, EventBridge, S3, and SageMaker
+- VDOT SmarterRoads and 511 API access
+- GaiaViz installed locally
+
+### Setup
 
 ```bash
-# Run everything (links + leaves + textures):
-python -m scene_updater \
-  --node Subgrid-np_node.csv \
-  --traffic fused_events_traffic_weather_dataset.csv \
-  --detections image_level_results.csv \
-  --asset Subgrid-np_asset.csv \
-  --output final_np_node.csv
+git clone https://github.com/Shub-1201/Traffic-Situational-Awareness-System.git
+cd Traffic-Situational-Awareness-System
+pip install -r requirements.txt
 ```
+
+### Run the scene updater
+
+Open the scene in GaiaViz, then start the orchestrator:
+
+<!-- TODO: confirm the entry point -->
 
 ```bash
-# Only update link colors from traffic data:
-python -m scene_updater \
-  --node Subgrid-np_node.csv \
-  --traffic fused_events_traffic_weather_dataset.csv \
-  --skip-leaves --skip-textures \
-  --output updated_links.csv
+python -m scene_updater
 ```
+
+Parts of the update can be skipped independently:
 
 ```bash
-# Only update leaf glyphs from YOLO detections:
-python -m scene_updater \
-  --node Subgrid-np_node.csv \
-  --detections image_level_results.csv \
-  --skip-links --skip-textures \
-  --output updated_leaves.csv
+python -m scene_updater --skip-leaves    # Skip vehicle count leaves
+python -m scene_updater --skip-textures  # Skip camera and weather images
+python -m scene_updater --skip-links     # Skip corridor link colors
 ```
 
-```bash
-# Only fix camera + weather textures:
-python -m scene_updater \
-  --node Subgrid-np_node.csv \
-  --asset Subgrid-v111_v03_np_asset.csv \
-  --skip-links --skip-leaves \
-  --output fixed_textures.csv
-```
+## Engineering Challenges
 
-## Overwriting the source file
+| Challenge | Root cause | Resolution |
+|---|---|---|
+| Camera pulls read the wrong hour of data | The script used local Eastern time while S3 folders followed UTC | Standardized folder resolution on UTC |
+| Lambda functions failed at runtime | PIL, NumPy, and Pandas dependency packaging conflicts | Built proper Lambda layers |
+| API schema changes threatened to break the pipeline | Column renames and a field type change arrived mid-sprint | Isolated field mappings in `config.py`, limiting changes to two files |
+| Scene updates moved the wrong elements | Parent node transforms propagate to their children | Enforced a leaf-node-only update rule |
+| Values were altered when written to CSV | Pandas stripped trailing zeros | Applied explicit float formatting |
 
-By default, if `--output` is not specified, the script overwrites the input node CSV in place and creates a Timestamped backup automatically:
-```bash
-# Overwrites Subgrid-v111_v03_np_node.csv directly (backup created)
-python -m scene_updater \
-  --node Subgrid-np_node.csv \
-  --traffic fused_events_traffic_weather_dataset.csv \
-  --detections image_level_results.csv \
-  --asset Subgrid-np_asset.csv
-```
+## Scope and Limitations
 
-A backup file like `Subgrid-np_node.csv.backup_20260331_143022` is created before any changes are written. To skip the backup, add `--no-backup`.
+- Coverage is limited to Arlington County's I-66 and I-395 corridors.
+- The system uses live data only and does not include crash or historical analysis.
+- YOLOv8 was used as a pretrained baseline because no labeled corridor dataset was available. The reported confidence scores are not a measure of precision or recall.
+- The model has no dedicated emergency-vehicle class, so that cluster is populated from `bus_count`.
 
-To write to a separate file instead, use `--output`:
-```bash
-python -m scene_updater \
-  --node Subgrid-np_node.csv \
-  --traffic traffic.csv \
-  --detections detections.csv \
-  --asset asset.csv \
-  --output final_np_node.csv
-```
+## Tech Stack
 
+**Cloud:** AWS Lambda, EventBridge, S3, SageMaker
+**Languages and data:** Python, Pandas, NumPy
+**Computer vision:** YOLOv8
+**Visualization:** GaiaViz, OSC over UDP
+**Data sources:** VDOT SmarterRoads, 511
 
-## Command line arguments
+## Acknowledgments
 
-| Argument | Required | Description |
-| `--node` | Yes | Path to the GaiaViz node CSV |
-| `--traffic` | No | Path to the fused traffic/weather/events CSV |
-| `--detections` | No | Path to the YOLO detection results CSV |
-| `--asset` | No | Path to the GaiaViz asset CSV (for texture fixes) |
-| `--output` | No | Output path (default: overwrites `--node`) |
-| `--skip-links` | No | Skip link color update |
-| `--skip-leaves` | No | Skip leaf color and scale update |
-| `--skip-textures` | No | Skip camera and weather texture fixes |
-| `--no-backup` | No | Skip creating a timestamped backup |
-
-## Package structure
-
-```
-scene_updater/
-├── __init__.py      # Package marker
-├── __main__.py      # Entry point for python -m scene_updater
-├── config.py        # All node IDs, color maps, thresholds
-├── loaders.py       # CSV loading utilities
-├── links.py         # Link color update logic
-├── leaves.py        # Leaf color + scale update logic
-├── textures.py      # Camera + weather texture fix logic
-└── main.py          # Orchestrator: load → update → save
-```
-
-### Module descriptions
-
-| Module | Purpose | Input CSV | Node fields modified |
-| `config.py` | Central configuration. All node IDs, color palettes, scale thresholds, and location mappings. When node IDs change between scene versions, update this file only. | — | — |
-| `loaders.py` | CSV loading utilities and asset texture ID resolution. | All CSVs | — |
-| `links.py` | Changes link colors based on `vehicle_occupancy_level` from the traffic CSV. For each link, finds the dominant level at each endpoint, picks the worst case. | `fused_events_traffic_weather_dataset.csv` | `color_r`, `color_g`, `color_b` |
-| `leaves.py` | Changes leaf glyph colors and scale based on YOLO detection counts. Aggregates across all cameras at each location per timestamp. 3 time snapshots (T0, T-1, T-2). | `image_level_results.csv` | `color_r`, `color_g`, `color_b`, `scale_x`, `scale_y`, `scale_z` |
-| `textures.py` | Maps the correct camera JPEG and weather icon to each cube's `np_texture_id` using the asset CSV. | `np_asset.csv` | `np_texture_id` |
-| `main.py` | Orchestrates loading, runs selected updaters in sequence, handles backup and save. | — | — |
-
-## Dependencies
-
-- Python 3.10+
-- pandas
-
-```bash
-pip install pandas
-```
-
----
-
-## Scene structure
-
-### Subgrid hierarchy
-
-The scene is organized as a tree rooted at subgrid node 42 (the Arlington map). Five hyperglyph pins sit on this subgrid, each representing a traffic corridor location.
-
-```
-Subgrid (id=42, type=6, tex=projectfinal.png)
-├── Dunn Loring pin  (id=43, geo=16, topo=5)
-├── Ballston pin     (id=62, geo=16, topo=5)
-├── Rosslyn pin      (id=80, geo=16, topo=5)
-├── Shirlington pin  (id=99, geo=16, topo=5)
-└── Pentagon pin     (id=117, geo=16, topo=5)
-```
-
-### Location mapping
-
-| Location | Root node ID | GPS (lat, lon) | Subgrid position (x, y) | Route |
-| I-66 West (Dunn Loring) | 43 | 38.8844, -77.1526 | -6.0, 5.8 | I-66 Corridor |
-| I-66 Mid (Ballston/Glebe) | 62 | 38.8879, -77.1150 | 1.8, 11.2 | I-66 Corridor |
-| I-66 East (Rosslyn) | 80 | 38.8953, -77.0999 | 10.7, 15.2 | I-66 Corridor |
-| I-395 South (Shirlington) | 99 | 38.8326, -77.1050 | 2.3, -19.2 | I-395 Corridor |
-| I-395 North (Pentagon) | 117 | 38.8690, -77.0590 | 12.3, -2.0 | I-395 Corridor |
-
-### Hyperglyph internal structure
-
-Each hyperglyph has an identical internal tree. Here is the structure for Dunn Loring (root 43) — other locations follow the same pattern with different node IDs:
-
-```
-Pin 43 (geo=16, bl=1)
-├── Camera cube 44 (geo=1, bl=2, tex=West_Dunn_Loring.jpeg)
-│   ├── Cluster A: Emergency (geo=19, bl=3, id=45)
-│   │   ├── Leaf 46 (geo=7, bl=4) — T0
-│   │   ├── Leaf 47 (geo=7, bl=4) — T-1
-│   │   └── Leaf 48 (geo=7, bl=4) — T-2
-│   ├── Cluster B: Trucks (geo=19, bl=3, id=49)
-│   │   ├── Leaf 50 (geo=7, bl=4) — T0
-│   │   ├── Leaf 51 (geo=7, bl=4) — T-1
-│   │   └── Leaf 52 (geo=7, bl=4) — T-2
-│   ├── Cluster C: Cars (geo=19, bl=3, id=53)
-│   │   ├── Leaf 54 (geo=7, bl=4) — T0
-│   │   ├── Leaf 55 (geo=7, bl=4) — T-1
-│   │   └── Leaf 56 (geo=7, bl=4) — T-2
-│   └── Link 57 (type=7, bl=3) → connects to Ballston cube 63
-└── Weather rod 58 (geo=7, bl=2)
-    ├── Storm cube 59 (geo=1, bl=3, tex=storm.png)
-    ├── Snowflake cube 60 (geo=1, bl=3, tex=snowflake.png)
-    └── Sun cube 61 (geo=1, bl=3, tex=sun.png)
-```
-
-### Camera cube node IDs
-
-| Location | Cube node ID | Correct texture | Asset item_id |
-| Dunn Loring | 44 | West_Dunn_Loring.jpeg | 19 |
-| Ballston | 63 | Mid_Ballston_Glebe.jpeg | 9 |
-| Rosslyn | 81 | example.jpg (placeholder) | 4 |
-| Shirlington | 100 | South_Shirlington.jpeg | 16 |
-| Pentagon | 118 | North_Pentagon.jpeg | 10 |
-
-### Weather cube node IDs
-
-| Location | Storm node | Snowflake node | Sun node |
-| Dunn Loring | 59 (tex=17) | 60 (tex=15) | 61 (tex=18) |
-| Ballston | 77 (tex=17) | 78 (tex=15) | 79 (tex=18) |
-| Rosslyn | 96 (tex=17) | 97 (tex=15) | 98 (tex=18) |
-| Shirlington | 114 (tex=17) | 115 (tex=15) | 116 (tex=18) |
-| Pentagon | 133 (tex=17) | 134 (tex=15) | 135 (tex=18) |
-
-### Leaf node IDs (detection glyphs)
-
-Each location has 9 leaf nodes (3 clusters × 3 time snapshots).
-
-**Cluster A — Emergency vehicles (bus_count)**
-
-| Location | T0 (latest) | T-1 | T-2 | Active color |
-| Dunn Loring | 46 | 47 | 48 | red (255,0,0) |
-| Ballston | 65 | 66 | 67 | red (255,0,0) |
-| Rosslyn | 83 | 84 | 85 | red (255,0,0) |
-| Shirlington | 102 | 103 | 104 | red (255,0,0) |
-| Pentagon | 120 | 121 | 122 | red (255,0,0) |
-
-**Cluster B — Trucks (truck_count)**
-
-| Location | T0 (latest) | T-1 | T-2 | Active color |
-| Dunn Loring | 50 | 51 | 52 | yellow (255,255,0) |
-| Ballston | 69 | 70 | 71 | yellow (255,255,0) |
-| Rosslyn | 87 | 88 | 89 | yellow (255,255,0) |
-| Shirlington | 106 | 107 | 108 | yellow (255,255,0) |
-| Pentagon | 124 | 125 | 126 | yellow (255,255,0) |
-
-**Cluster C — Cars (car_count)**
-
-| Location | T0 (latest) | T-1 | T-2 | Active color |
-| Dunn Loring | 54 | 55 | 56 | blue (0,0,255) |
-| Ballston | 73 | 74 | 75 | blue (0,0,255) |
-| Rosslyn | 91 | 92 | 93 | blue (0,0,255) |
-| Shirlington | 110 | 111 | 112 | blue (0,0,255) |
-| Pentagon | 128 | 129 | 130 | blue (0,0,255) |
-
-**Leaf color logic:** If detection count > 0 at that timestamp, the leaf shows its assigned color. If count = 0, the leaf turns grey (128,128,128).
-
-**Leaf scale logic:** Scale is normalized within each vehicle type. `scale = 0.15 + (count / max_count) × 1.05`. Zero detections shrink to 0.05 (near invisible).
-
-### Link node IDs
-
-| Link node ID | A-end (parent) | B-end (child) | Road segment | Default color |
-| 57 | Dunn Loring cube (44) | Ballston cube (63) | I-66 | green (0,255,0) |
-| 94 | Rosslyn cube (81) | Ballston cube (63) | I-66 | green (0,255,0) |
-| 131 | Pentagon cube (118) | Shirlington cube (100) | I-395 | green (0,255,0) |
-
-**Link color logic:** Based on `vehicle_occupancy_level` from the traffic CSV. The script finds the dominant level at each endpoint, picks the worst case.
-
-| Occupancy level | Color |
-| low | green (0,255,0) |
-| moderate | yellow (255,255,0) |
-| high | red (255,0,0) |
-
-### Asset texture IDs
-
-| item_id | Filename | Used by |
-| 4 | example.jpg | Rosslyn camera (placeholder) |
-| 9 | Mid_Ballston_Glebe.jpeg | Ballston camera cube |
-| 10 | North_Pentagon.jpeg | Pentagon camera cube |
-| 13 | projectfinal.png | Subgrid map texture |
-| 15 | snowflake.png | Weather cubes |
-| 16 | South_Shirlington.jpeg | Shirlington camera cube |
-| 17 | storm.png | Weather cubes |
-| 18 | sun.png | Weather cubes |
-| 19 | West_Dunn_Loring.jpeg | Dunn Loring camera cube |
-
-### GaiaViz geometry reference
-
-| geo ID | Shape | Used for |
-| 1 | Cube | Camera cubes, weather cubes |
-| 6 | Link geometry | Links between hyperglyphs |
-| 7 | Ring / Rod | Leaf detection rings, weather rod |
-| 16 | Pin | Location root pin |
-| 19 | Pin (variant) | Cluster parent nodes |
-| 21 | Grid mesh | Subgrid map |
-
-### GaiaViz type codes
-
-| Type | Meaning |
-| 0 | Grid |
-| 1 | Camera |
-| 5 | Hyperglyph |
-| 6 | Subgrid |
-| 7 | Link |
-
----
-
-## Input CSV formats
-
-### Traffic CSV (`fused_events_traffic_weather_dataset.csv`)
-
-Key columns used by the link updater:
-
-| Column | Description | Example |
-| `anchor_location_name` | Location name | I-395 North (near Pentagon) |
-| `vehicle_occupancy_level` | low / moderate / high | low |
-| `link_name` | Road segment identifier | I-395N |
-
-### Detection CSV (`image_level_results.csv`)
-
-Key columns used by the leaf updater:
-
-| Column | Description | Example |
-| `target_location` | Location (underscore format) | I395_North_Pentagon |
-| `timestamp` | Capture timestamp | 20260329T191639Z |
-| `car_count` | Cars detected in this image | 12 |
-| `truck_count` | Trucks detected | 2 |
-| `bus_count` | Buses detected (used as emergency proxy) | 0 |
-
-### Asset CSV (`*_np_asset.csv`)
-
-| Column | Description | Example |
-| `item_id` | Texture ID referenced by `np_texture_id` in node CSV | 19 |
-| `name` | Image filename | West_Dunn_Loring.jpeg |
-| `path` | File path | .\User\_Global_\images\ |
-
----
-
-## Updating for a new scene version
-
-When node IDs change (e.g. moving from v111 to v03), only `config.py` needs to be updated:
-
-1. Open the new node CSV and identify the 5 location pins on the subgrid
-2. Trace each pin's children to find camera cubes, leaf nodes, weather cubes, and links
-3. Update the IDs in `config.py`
-
-The rest of the codebase references `config.py` and does not hardcode any node IDs.
+Built by Team Dominion for DAEN 690 at George Mason University. Thank you to Claire Saxon and Shane Saxon of GaiaViz for their guidance as client partners throughout the project.
