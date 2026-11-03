@@ -170,4 +170,8 @@ python -m scene_updater --skip-links     # Skip corridor link colors
 
 ## Acknowledgments
 
-Built by Team Dominion for DAEN 690 at George Mason University. Thank you to Claire Saxon and Shane Saxon of GaiaViz for their guidance as client partners throughout the project.
+This project was developed by **Team Dominion** as part of **DAEN 690 at George Mason University**.
+
+We would like to express our sincere gratitude to our advisor, **Dr. James Baldo**, for his valuable guidance, mentorship, and support throughout the project.
+
+We also extend our appreciation to **Claire Saxon, Shane Saxon, and the GaiaViz team** for their collaboration, insights, and continuous support as our client partners. Their feedback and expertise were instrumental in shaping the development and successful completion of this project.
